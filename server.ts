@@ -6,34 +6,49 @@ import bodyParser from "body-parser";
 import twilio from "twilio";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
-import * as admin from "firebase-admin";
+import admin from "firebase-admin";
 import fs from "fs";
+import axios from "axios";
 
 dotenv.config();
 
+console.log("Starting server initialization...");
+
 // Initialize Firebase Admin
 const firebaseConfig = JSON.parse(fs.readFileSync("./firebase-applet-config.json", "utf-8"));
+
 if (!admin.apps.length) {
   admin.initializeApp({
     projectId: firebaseConfig.projectId,
   });
 }
-const db = admin.firestore(admin.app());
-// Handle named database if present
-if (firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== "(default)") {
-  // Note: In some versions of firebase-admin, you set the databaseId differently.
-  // For standard usage, we'll assume the default or handle it if the SDK supports it.
-  // Actually, admin.firestore() uses the default database. 
-  // If a specific databaseId is needed, we might need a different approach, 
-  // but usually in AI Studio the default is used or the projectId is enough.
+
+// Use the named database if provided
+const db = admin.firestore(firebaseConfig.firestoreDatabaseId);
+const FieldValue = admin.firestore.FieldValue;
+
+console.log("Firebase Admin initialized for database:", firebaseConfig.firestoreDatabaseId);
+
+// Test Firestore Connection
+async function testFirestore() {
+  try {
+    console.log("Testing Firestore connection...");
+    const testSnap = await db.collection("debts").limit(1).get();
+    console.log("Firestore connection successful, found", testSnap.size, "debts");
+  } catch (err) {
+    console.error("Firestore connection test failed:", err);
+  }
 }
+testFirestore();
 
 // Initialize Twilio Client
-const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN 
-  ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
-  : null;
+let twilioClient: any = null;
 
 async function startServer() {
+  if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
+    twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    console.log("Twilio client initialized");
+  }
   const app = express();
   const PORT = 3000;
 
@@ -76,15 +91,36 @@ async function startServer() {
       });
       const initialMessage = result.text || "Olá! Gostaria de conversar sobre sua pendência.";
 
-      // 3. Send via Twilio if configured
-      if (twilioClient && process.env.TWILIO_WHATSAPP_NUMBER) {
+      // 3. Send via Z-API or Twilio
+      let sent = false;
+      
+      // Try Z-API first
+      if (process.env.ZAPI_INSTANCE_ID && process.env.ZAPI_TOKEN) {
+        try {
+          const zapiUrl = `https://api.z-api.io/instances/${process.env.ZAPI_INSTANCE_ID}/token/${process.env.ZAPI_TOKEN}/send-text`;
+          await axios.post(zapiUrl, {
+            phone: debt.debtorPhone.replace("+", ""),
+            message: initialMessage
+          }, {
+            headers: { "Client-Token": process.env.ZAPI_CLIENT_TOKEN || "" }
+          });
+          console.log(`Mensagem enviada via Z-API para ${debt.debtorPhone}`);
+          sent = true;
+        } catch (err: any) {
+          console.error("Erro ao enviar via Z-API:", err.response?.data || err.message);
+        }
+      }
+
+      // Fallback to Twilio
+      if (!sent && twilioClient && process.env.TWILIO_WHATSAPP_NUMBER) {
         try {
           await twilioClient.messages.create({
             body: initialMessage,
             from: process.env.TWILIO_WHATSAPP_NUMBER,
             to: `whatsapp:${debt.debtorPhone}`
           });
-          console.log(`Mensagem enviada para ${debt.debtorPhone}`);
+          console.log(`Mensagem enviada via Twilio para ${debt.debtorPhone}`);
+          sent = true;
         } catch (err: any) {
           console.error("Erro ao enviar via Twilio:", err);
         }
@@ -94,13 +130,13 @@ async function startServer() {
       await debtRef.collection("messages").add({
         sender: "agent",
         content: initialMessage,
-        timestamp: admin.firestore.FieldValue.serverTimestamp()
+        timestamp: FieldValue.serverTimestamp()
       });
 
       await debtRef.update({ 
         status: "negotiating",
         lastMessage: initialMessage,
-        lastMessageAt: admin.firestore.FieldValue.serverTimestamp()
+        lastMessageAt: FieldValue.serverTimestamp()
       });
 
       res.json({ success: true, message: initialMessage });
@@ -110,19 +146,37 @@ async function startServer() {
     }
   });
 
-  // WhatsApp Webhook (Twilio)
+  // WhatsApp Webhook (Z-API or Twilio)
   app.post("/api/whatsapp/webhook", async (req, res) => {
-    const { Body, From } = req.body; 
-    const phone = From ? From.replace("whatsapp:", "") : "";
+    // Handle Z-API or Twilio formats
+    const isZApi = !!req.body.instanceId;
+    
+    // For Z-API, only process ReceivedMessage
+    if (isZApi && req.body.type !== "ReceivedMessage") {
+      return res.status(200).send();
+    }
+
+    const Body = req.body.Body || req.body.text?.message || req.body.image?.caption || req.body.video?.caption;
+    const From = req.body.From || (req.body.phone ? `whatsapp:+${req.body.phone}` : "");
+    
+    // Clean phone number (remove whatsapp: prefix, +, and any non-digits)
+    const phone = From ? From.replace("whatsapp:", "").replace(/\D/g, "") : "";
 
     if (!phone || !Body) return res.status(200).send();
 
     try {
-      // 1. Find Debt by Phone
-      const snapshot = await db.collection("debts")
-        .where("debtorPhone", "==", phone)
+      // 1. Find Debt by Phone (try with and without +)
+      let snapshot = await db.collection("debts")
+        .where("debtorPhone", "==", `+${phone}`)
         .limit(1)
         .get();
+      
+      if (snapshot.empty) {
+        snapshot = await db.collection("debts")
+          .where("debtorPhone", "==", phone)
+          .limit(1)
+          .get();
+      }
       
       if (snapshot.empty) {
         console.log(`Dívida não encontrada para o telefone ${phone}`);
@@ -138,11 +192,11 @@ async function startServer() {
       await debtRef.collection("messages").add({
         sender: "debtor",
         content: Body,
-        timestamp: admin.firestore.FieldValue.serverTimestamp()
+        timestamp: FieldValue.serverTimestamp()
       });
-      await debtRef.update({
+      await updateDoc(debtRef, {
         lastMessage: Body,
-        lastMessageAt: admin.firestore.FieldValue.serverTimestamp()
+        lastMessageAt: FieldValue.serverTimestamp()
       });
 
       // 3. Get Context (Last 6 messages)
@@ -179,17 +233,34 @@ async function startServer() {
       await debtRef.collection("messages").add({
         sender: "agent",
         content: responseText,
-        timestamp: admin.firestore.FieldValue.serverTimestamp()
+        timestamp: FieldValue.serverTimestamp()
       });
-      await debtRef.update({
+      await updateDoc(debtRef, {
         lastMessage: responseText,
-        lastMessageAt: admin.firestore.FieldValue.serverTimestamp()
+        lastMessageAt: FieldValue.serverTimestamp()
       });
 
-      // 6. Respond to Twilio
-      const twiml = new twilio.twiml.MessagingResponse();
-      twiml.message(responseText);
-      res.type("text/xml").send(twiml.toString());
+      // 6. Respond to Client (Z-API or Twilio)
+      if (req.body.instanceId) {
+        // Z-API Webhook - Send response via API
+        try {
+          const zapiUrl = `https://api.z-api.io/instances/${process.env.ZAPI_INSTANCE_ID}/token/${process.env.ZAPI_TOKEN}/send-text`;
+          await axios.post(zapiUrl, {
+            phone: phone,
+            message: responseText
+          }, {
+            headers: { "Client-Token": process.env.ZAPI_CLIENT_TOKEN || "" }
+          });
+        } catch (err: any) {
+          console.error("Erro ao responder via Z-API:", err.response?.data || err.message);
+        }
+        res.status(200).send();
+      } else {
+        // Twilio Webhook
+        const twiml = new twilio.twiml.MessagingResponse();
+        twiml.message(responseText);
+        res.type("text/xml").send(twiml.toString());
+      }
 
     } catch (error) {
       console.error("Erro no Webhook:", error);
@@ -213,8 +284,12 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server is listening on http://0.0.0.0:${PORT}`);
+    console.log("Environment:", process.env.NODE_ENV || "development");
   });
 }
 
-startServer();
+console.log("Calling startServer()...");
+startServer().catch(err => {
+  console.error("Fatal error in startServer:", err);
+});
