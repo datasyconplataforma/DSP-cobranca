@@ -25,8 +25,7 @@ service cloud.firestore {
     }
 
     function isValidMessage(data) {
-      return data.debtId is string &&
-             data.sender in ['agent', 'debtor'] &&
+      return data.sender in ['agent', 'debtor'] &&
              data.content is string && data.content.size() > 0 && data.content.size() < 2000;
     }
 

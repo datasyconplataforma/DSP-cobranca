@@ -194,7 +194,7 @@ async function startServer() {
         content: Body,
         timestamp: FieldValue.serverTimestamp()
       });
-      await updateDoc(debtRef, {
+      await debtRef.update({
         lastMessage: Body,
         lastMessageAt: FieldValue.serverTimestamp()
       });
@@ -235,7 +235,7 @@ async function startServer() {
         content: responseText,
         timestamp: FieldValue.serverTimestamp()
       });
-      await updateDoc(debtRef, {
+      await debtRef.update({
         lastMessage: responseText,
         lastMessageAt: FieldValue.serverTimestamp()
       });

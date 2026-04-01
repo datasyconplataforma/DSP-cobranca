@@ -330,37 +330,41 @@ export default function App() {
             </div>
 
             <footer className="p-6 border-t border-neutral-100">
-              <div className="flex gap-4">
+              <form 
+                className="flex gap-4"
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  const form = e.currentTarget;
+                  const input = form.elements.namedItem("simInput") as HTMLInputElement;
+                  const content = input.value;
+                  if (!content) return;
+                  input.value = "";
+                  
+                  // Simula mensagem do devedor
+                  await addDoc(collection(db, `debts/${selectedDebt.id}/messages`), {
+                    sender: "debtor",
+                    content,
+                    timestamp: serverTimestamp()
+                  });
+
+                  // Chama o webhook para processar a resposta (em um app real, isso viria do WhatsApp)
+                  fetch("/api/whatsapp/webhook", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ Body: content, From: selectedDebt.debtorPhone })
+                  });
+                }}
+              >
                 <input 
+                  name="simInput"
                   type="text" 
                   placeholder="Simular resposta do devedor..." 
                   className="flex-1 px-4 py-3 rounded-xl border border-neutral-200 focus:ring-2 focus:ring-blue-500 outline-none"
-                  onKeyDown={async (e) => {
-                    if (e.key === "Enter") {
-                      const content = e.currentTarget.value;
-                      if (!content) return;
-                      e.currentTarget.value = "";
-                      
-                      // Simula mensagem do devedor
-                      await addDoc(collection(db, `debts/${selectedDebt.id}/messages`), {
-                        sender: "debtor",
-                        content,
-                        timestamp: serverTimestamp()
-                      });
-
-                      // Chama o webhook para processar a resposta (em um app real, isso viria do WhatsApp)
-                      fetch("/api/whatsapp/webhook", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ Body: content, From: selectedDebt.debtorPhone })
-                      });
-                    }
-                  }}
                 />
-                <button className="p-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors">
+                <button type="submit" className="p-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors">
                   <Send size={20} />
                 </button>
-              </div>
+              </form>
             </footer>
           </>
         ) : (
