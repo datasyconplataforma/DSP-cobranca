@@ -1,0 +1,5 @@
+{
+  "name": "Cobrança Inteligente WhatsApp",
+  "description": "Agente de IA para gestão e cobrança de dívidas via WhatsApp, utilizando Gemini para negociações humanizadas.",
+  "requestFramePermissions": []
+}

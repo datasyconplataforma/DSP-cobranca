@@ -1,0 +1,43 @@
+{
+  "entities": {
+    "Debt": {
+      "title": "Debt",
+      "description": "Informações sobre uma dívida pendente.",
+      "type": "object",
+      "properties": {
+        "debtorName": { "type": "string", "description": "Nome do devedor" },
+        "debtorPhone": { "type": "string", "description": "Telefone do devedor (WhatsApp)" },
+        "amount": { "type": "number", "description": "Valor da dívida" },
+        "dueDate": { "type": "string", "format": "date", "description": "Data de vencimento" },
+        "status": { "type": "string", "enum": ["pending", "negotiating", "paid", "overdue"], "description": "Status da cobrança" },
+        "lastContact": { "type": "string", "format": "date-time", "description": "Último contato realizado" },
+        "notes": { "type": "string", "description": "Observações gerais" },
+        "uid": { "type": "string", "description": "ID do usuário que cadastrou a dívida" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Data de criação do registro" }
+      },
+      "required": ["debtorName", "debtorPhone", "amount", "dueDate", "status", "uid", "createdAt"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Histórico de mensagens trocadas.",
+      "type": "object",
+      "properties": {
+        "debtId": { "type": "string", "description": "ID da dívida relacionada" },
+        "sender": { "type": "string", "enum": ["agent", "debtor"], "description": "Quem enviou a mensagem" },
+        "content": { "type": "string", "description": "Conteúdo da mensagem" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "Hora do envio" }
+      },
+      "required": ["debtId", "sender", "content", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/debts/{debtId}": {
+      "schema": "Debt",
+      "description": "Coleção de dívidas cadastradas."
+    },
+    "/debts/{debtId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Histórico de mensagens de uma dívida específica."
+    }
+  }
+}

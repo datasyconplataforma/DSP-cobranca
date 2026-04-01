@@ -1,0 +1,47 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.uid;
+    }
+    
+    function isValidDebt(data) {
+      return data.debtorName is string && data.debtorName.size() > 0 && data.debtorName.size() < 100 &&
+             data.debtorPhone is string && data.debtorPhone.size() > 8 &&
+             data.amount is number && data.amount >= 0 &&
+             data.status in ['pending', 'negotiating', 'paid', 'overdue'] &&
+             data.uid == request.auth.uid &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidMessage(data) {
+      return data.debtId is string &&
+             data.sender in ['agent', 'debtor'] &&
+             data.content is string && data.content.size() > 0 && data.content.size() < 2000;
+    }
+
+    // Debts Collection
+    match /debts/{debtId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && isValidDebt(request.resource.data);
+      allow update: if isDocOwner() && isValidDebt(request.resource.data);
+      allow delete: if isDocOwner();
+      
+      // Messages Subcollection
+      match /messages/{messageId} {
+        allow read: if isAuthenticated() && get(/databases/$(database)/documents/debts/$(debtId)).data.uid == request.auth.uid;
+        allow create: if isAuthenticated() && get(/databases/$(database)/documents/debts/$(debtId)).data.uid == request.auth.uid && isValidMessage(request.resource.data);
+      }
+    }
+  }
+}
